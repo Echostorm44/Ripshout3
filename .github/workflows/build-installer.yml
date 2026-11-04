@@ -1,0 +1,153 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# build-installer.yml — test RipShout, build the setup exe, sign every exe with Azure Trusted Signing, and attach
+# it (with the auto-update manifest and package) to a GitHub Release. Runs the tests on every push to main;
+# builds and releases when a version tag (v*) is pushed.
+#
+# `cascade package --installer` builds the app, update shim, wizard, uninstaller and single-file setup
+# launcher and, given the --sign-azure-* flags, signs every one of them. The update package's app exe is
+# published outside the packager, so it is signed separately. Auth is OIDC: azure/login federates GitHub's
+# id-token to the signing service — no secrets or pfx in the repo.
+#
+# Prerequisites in the repo settings: an environment named "release" with AZURE_CLIENT_ID and
+# AZURE_TENANT_ID secrets, and a federated credential in Azure for
+# subject repo:Echostorm44/Ripshout3:environment:release.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Build Installer
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write          # create the GitHub Release + upload assets
+  id-token: write          # OIDC token for Azure Trusted Signing (azure/login)
+
+env:
+  SIGN_ENDPOINT: https://eus.codesigning.azure.net/
+  SIGN_ACCOUNT: AdamMarciniec
+  SIGN_PROFILE: AdamMarciniec
+  SIGN_TIMESTAMP: http://timestamp.acs.microsoft.com
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test
+        run: dotnet run --project tests/Ripshout3.Tests/Ripshout3.Tests.csproj -c Release
+
+  installer:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Derive version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match '^v(.+)$') { $v = $Matches[1] } else { $v = '0.0.0-dev' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "Version=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Building version $v"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          # The signing principal is scoped to the Trusted Signing account, not a subscription.
+          allow-no-subscriptions: true
+
+      - name: Install Trusted Signing dlib + locate signtool
+        shell: pwsh
+        run: |
+          $ts = Join-Path $env:RUNNER_TEMP 'tsclient'
+          New-Item -ItemType Directory -Force $ts | Out-Null
+          foreach ($pkg in @('Microsoft.Trusted.Signing.Client','Microsoft.ArtifactSigning.Client')) {
+            nuget install $pkg -OutputDirectory $ts -Source https://api.nuget.org/v3/index.json -NonInteractive
+            if ($LASTEXITCODE -eq 0) { break }
+          }
+          $dlib = (Get-ChildItem $ts -Recurse -Filter 'Azure.CodeSigning.Dlib.dll' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $dlib) { Write-Error 'Azure.CodeSigning.Dlib.dll not found in the Trusted Signing client package.'; exit 1 }
+          $signtool = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter 'signtool.exe' -ErrorAction SilentlyContinue |
+                       Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $signtool) { Write-Error 'signtool.exe not found.'; exit 1 }
+          $meta = Join-Path $env:RUNNER_TEMP 'trusted-signing.json'
+          "{""Endpoint"":""$env:SIGN_ENDPOINT"",""CodeSigningAccountName"":""$env:SIGN_ACCOUNT"",""CertificateProfileName"":""$env:SIGN_PROFILE""}" | Set-Content -Path $meta -Encoding ascii
+          "TS_DLIB=$dlib"        | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TS_SIGNTOOL=$signtool"| Out-File -FilePath $env:GITHUB_ENV -Append
+          "TS_META=$meta"        | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install cascade CLI
+        shell: pwsh
+        run: |
+          dotnet tool install --global Echostorm.Cascade.UI.Tools --prerelease
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build + sign installer
+        shell: pwsh
+        run: |
+          cascade package --installer --project Ripshout3.csproj --configuration Release --output dist `
+            --sign-azure-endpoint $env:SIGN_ENDPOINT `
+            --sign-azure-account  $env:SIGN_ACCOUNT `
+            --sign-azure-profile  $env:SIGN_PROFILE `
+            --sign-azure-dlib     "$env:TS_DLIB" `
+            --sign-timestamp      $env:SIGN_TIMESTAMP
+          if (-not (Test-Path 'dist/Ripshout3-Setup.exe')) { Write-Error 'Setup exe was not produced.'; exit 1 }
+          $sig = Get-AuthenticodeSignature 'dist/Ripshout3-Setup.exe'
+          Write-Host "Setup.exe signature status: $($sig.Status)"
+          if ($sig.Status -ne 'Valid') { Write-Error "Setup.exe is not validly signed ($($sig.Status))."; exit 1 }
+
+      - name: Build + sign update package, generate manifest
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          dotnet publish Ripshout3.csproj -c Release -r win-x64 --self-contained -p:PublishAot=true -p:DebugType=none -p:DebugSymbols=false -o app-publish
+          & "$env:TS_SIGNTOOL" sign /v /fd SHA256 /tr $env:SIGN_TIMESTAMP /td SHA256 /dlib "$env:TS_DLIB" /dmdf "$env:TS_META" "app-publish\Ripshout3.exe"
+          if ($LASTEXITCODE -ne 0) { Write-Error 'Signing the update-package app exe failed.'; exit 1 }
+          $zip = "dist/Ripshout3-$ver-win-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path app-publish/* -DestinationPath $zip
+          cascade publish --github Echostorm44/Ripshout3 --update-manifest --dry-run `
+            --app-id C595345A-BA2A-4AFD-8929-A5DFA979A5D1 `
+            --version $ver --rid win-x64 --package $zip --dist dist
+          if (-not (Test-Path 'dist/manifest.json')) { Write-Error 'manifest.json was not generated.'; exit 1 }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ripshout3-Setup
+          path: dist/Ripshout3-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RipShout ${{ steps.ver.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

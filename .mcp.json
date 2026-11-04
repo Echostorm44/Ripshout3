@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cascade": {
+      "type": "stdio",
+      "command": "cascade",
+      "args": ["mcp", "serve"]
+    }
+  }
+}

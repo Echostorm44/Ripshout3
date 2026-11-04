@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Ripshout3</AssemblyName>
+    <RootNamespace>Ripshout3</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Version>3.0.0</Version>
+
+    <!-- The cascade installer packager stages helper projects under "<output>-build"; keep them,
+         and the tests, out of this project's default globbing. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);dist/**;dist-build/**;tests/**</DefaultItemExcludes>
+
+    <ApplicationIcon>Assets\Ripshout.ico</ApplicationIcon>
+
+    <!-- Release is self-contained AOT (the installer wizard references this project, and a
+         self-contained exe cannot reference a non-self-contained one: NETSDK1150). -->
+    <PublishAot Condition="'$(Configuration)' == 'Release'">true</PublishAot>
+    <OptimizationPreference Condition="'$(Configuration)' == 'Release'">Speed</OptimizationPreference>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+
+    <!-- Publish to bin\publish, not bin\Release\net10.0\win-x64\publish. -->
+    <PublishDir>$(MSBuildProjectDirectory)\bin\publish\</PublishDir>
+  </PropertyGroup>
+
+  <!-- Real-time audio decode needs the optimiser even in a debug build. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.51" />
+    <PackageReference Include="Echostorm.SharpImage" Version="1.0.19" />
+    <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.4" />
+    <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\DefaultBackdrop.png" LogicalName="DefaultBackdrop.png" />
+    <EmbeddedResource Include="Assets\RipshoutIcon.png" LogicalName="RipshoutIcon.png" />
+    <InternalsVisibleTo Include="Ripshout3.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A radio player sits open all day: favour a small footprint over the last few percent of allocation speed. -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
+
+</Project>
