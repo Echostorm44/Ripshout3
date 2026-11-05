@@ -9,7 +9,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsAotCompatible>true</IsAotCompatible>
-    <Version>3.0.0</Version>
+    <!-- CI passes the tag's version in the Version environment variable; this is only the local fallback. -->
+    <Version Condition="'$(Version)' == ''">3.0.0</Version>
 
     <!-- The cascade installer packager stages helper projects under "<output>-build"; keep them,
          and the tests, out of this project's default globbing. -->
