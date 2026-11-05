@@ -99,9 +99,14 @@ internal sealed class SettingsView : Component
                                     .FontSize(12).Color(MainView.TextSecondary).Expand(),
                                 new Button("Open", () => OpenFolder(AppPaths.LogFolder)).AccessibleLabel("Open the log folder"),
                             ])),
+                    new Label($"RipShout {AppVersion}").FontSize(12).Color(MainView.TextSecondary),
                 ])
                 .MaxWidth(620)
                 .Padding(EdgeInsets.Only(top: 22, left: 28, right: 28, bottom: 28)));
+
+    // The released version CI stamps into the build, as major.minor.patch.
+    private static string AppVersion =>
+        typeof(SettingsView).Assembly.GetName().Version is { } version ? $"{version.Major}.{version.Minor}.{version.Build}" : "";
 
     // A folder setting: its name and purpose, where it is now, and buttons to change or open it.
     private Node FolderRow(string title, string hint, Func<string> current, Action<string> set) =>

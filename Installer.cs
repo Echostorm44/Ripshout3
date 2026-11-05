@@ -19,7 +19,8 @@ public sealed class RipshoutInstaller : CascadeInstaller
         Version = ResolveVersion(),
         Publisher = "Echostorm",
         Description = "An internet radio player that shows what's playing and can record it.",
-        InstallDir = InstallDir.LocalAppData("Ripshout3"),
+        // Not %LOCALAPPDATA%\Ripshout3 itself: that is where RipShout keeps its data (AppPaths.DataFolder).
+        InstallDir = InstallDir.LocalAppData(@"Programs\Ripshout3"),
         Output = "Ripshout3-Setup",
         RequiresAdmin = false,                   // per-user: LocalAppData + HKCU only
         Shortcuts =
